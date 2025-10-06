@@ -135,6 +135,23 @@ app.put("/api/posts/:id/book", async (req, res) => {
   }
 });
 
+//get a single post by ID 
+
+app.get("/api/posts/:id", async (req, res) =>{
+  try{
+    const id = req.params.id;
+    const post = await foodCollection.findOne({ _id: new ObjectId(id)});
+
+    if(!post){
+      return res.status(404).json({error: "post not found"});
+    }
+    res.json(post)
+  }catch(err){
+    console.error(err);
+    res.status(500).json({error: " server error"})
+  }
+});
+
 
 app.get("/", (req, res) => {
   res.send(" FoodShare API running...");
