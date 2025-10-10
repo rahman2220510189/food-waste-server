@@ -1,4 +1,3 @@
-
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
@@ -55,6 +54,18 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
+// Distance calculation function (Haversine formula)
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Earth radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 // upload food post
 app.post("/api/posts", upload.single("image"), async (req, res) => {
   try {
@@ -88,6 +99,34 @@ app.post("/api/posts", upload.single("image"), async (req, res) => {
   }
 });
 
+// Get all posts with optional distance calculation
+app.get("/api/posts", async (req, res) => {
+  try {
+    const { lat, lng } = req.query;
+    const posts = await foodCollection.find({ status: "available" }).sort({ createdAt: -1 }).toArray();
+
+    // if user location location doesn't find, distance calculate 
+    if (lat && lng) {
+      const userLat = parseFloat(lat);
+      const userLng = parseFloat(lng);
+
+      posts.forEach(post => {
+        if (post.location?.lat && post.location?.lng) {
+          post.distance = calculateDistance(userLat, userLng, post.location.lat, post.location.lng);
+        } else {
+          post.distance = null;
+        }
+      });
+
+      // Distance by sort
+      posts.sort((a, b) => (a.distance || Infinity) - (b.distance || Infinity));
+    }
+
+    res.json(posts);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 //recent post
 app.get("/api/recent-posts", async (req, res) => {
@@ -103,11 +142,79 @@ app.get("/api/recent-posts", async (req, res) => {
   }
 });
 
+// search 
+app.get("/api/posts/search", async (req, res) => {
+  try {
+    const { q, lat, lng } = req.query;
+
+    // Empty search query array return 
+    if (!q || q.trim() === "") {
+      return res.json([]);
+    }
+
+    // MongoDB regex  title, restaurantName,  address 
+    const filter = {
+      $or: [
+        { title: { $regex: q, $options: "i" } },
+        { restaurantName: { $regex: q, $options: "i" } },
+        { "location.address": { $regex: q, $options: "i" } }
+      ],
+      status: "available"
+    };
+    const posts = await foodCollection.find(filter).limit(10).toArray();
+
+    // Distance calculation location 
+    if (lat && lng) {
+      const userLat = parseFloat(lat);
+      const userLng = parseFloat(lng);
+
+      posts.forEach(post => {
+        if (post.location?.lat && post.location?.lng) {
+          post.distance = calculateDistance(userLat, userLng, post.location.lat, post.location.lng);
+        }
+      });
+    }
+
+    res.json(posts);
+  } catch (error) {
+    console.error("Search Error:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+//get a single post by ID - 
+app.get("/api/posts/:id", async (req, res) =>{
+  try{
+    const id = req.params.id;
+    
+    // ObjectId validation 
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid post ID format" });
+    }
+    
+    const post = await foodCollection.findOne({ _id: new ObjectId(id)});
+
+    if(!post){
+      return res.status(404).json({error: "Post not found"});
+    }
+    res.json(post)
+  }catch(err){
+    console.error(err);
+    res.status(500).json({error: "Server error"})
+  }
+});
+
 // book post
 app.put("/api/posts/:id/book", async (req, res) => {
   try {
     const id = req.params.id;
     const {userName, contact, address} = req.body;
+    
+    // ObjectId validation 
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid post ID format" });
+    }
+    
     const post = await foodCollection.findOne({ _id: new ObjectId(id) });
 
     if (!post) return res.status(404).json({ error: "Post not found" });
@@ -117,15 +224,13 @@ app.put("/api/posts/:id/book", async (req, res) => {
     }
 
     if(!post.isFree){
-    return res.status(400).json({ error: "This is not a free food, please order!" });
-   
+      return res.status(400).json({ error: "This is not a free food, please order!" });
     }
 
     const updated = await foodCollection.updateOne(
       { _id: new ObjectId(id) },
       { $set: { status: "booked" ,
                 bookedBy: {userName, contact, address}
-
       } }
     );
 
@@ -134,24 +239,6 @@ app.put("/api/posts/:id/book", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
-//get a single post by ID 
-
-app.get("/api/posts/:id", async (req, res) =>{
-  try{
-    const id = req.params.id;
-    const post = await foodCollection.findOne({ _id: new ObjectId(id)});
-
-    if(!post){
-      return res.status(404).json({error: "post not found"});
-    }
-    res.json(post)
-  }catch(err){
-    console.error(err);
-    res.status(500).json({error: " server error"})
-  }
-});
-
 
 app.get("/", (req, res) => {
   res.send(" FoodShare API running...");
