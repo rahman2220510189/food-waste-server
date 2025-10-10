@@ -119,7 +119,7 @@ app.get("/api/posts", async (req, res) => {
       });
 
       // Distance by sort
-      posts.sort((a, b) => (a.distance || Infinity) - (b.distance || Infinity));
+      // posts.sort((a, b) => (a.distance || Infinity) - (b.distance || Infinity));
     }
 
     res.json(posts);
