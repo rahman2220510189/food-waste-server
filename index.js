@@ -10,11 +10,9 @@ const { MongoClient, ObjectId, ServerApiVersion } = require("mongodb");
 const app = express();
 const port = process.env.PORT || 5000;
 
-
 app.use(cors());
 app.use(express.json());
-app.use("/uploads", express.static("uploads")); // static serve
-
+app.use("/uploads", express.static("uploads"));
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.cjuyyb2.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
@@ -27,7 +25,6 @@ const client = new MongoClient(uri, {
 });
 
 let foodCollection;
-const orderCollection = client.db("food-waste-sarver").collection("orders");
 
 async function run() {
   try {
@@ -40,7 +37,6 @@ async function run() {
 }
 run().catch(console.dir);
 
-//multer setup and image upload
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     if (!fs.existsSync("uploads")) {
@@ -54,9 +50,8 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// Distance calculation function (Haversine formula)
 function calculateDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371; // Earth radius in km
+  const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
   const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
@@ -66,7 +61,7 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
-// upload food post
+// Upload food post
 app.post("/api/posts", upload.single("image"), async (req, res) => {
   try {
     const isFree = req.body.isFree === "true";
@@ -78,18 +73,20 @@ app.post("/api/posts", upload.single("image"), async (req, res) => {
         lng: parseFloat(req.body.lng),
         address: req.body.address,
       },
-      price: isFree? 0: parseFloat(req.body.price) ,
+      price: isFree ? 0 : parseFloat(req.body.price),
       isFree,
-     
       status: "available",
       createdAt: new Date(),
     };
 
-    if(!isFree){
+    if (!isFree) {
       foodData.restaurantName = req.body.restaurantName;
       foodData.restaurantAddress = req.body.restaurantAddress;
       foodData.quantity = parseInt(req.body.quantity);
-      foodData.review = req.body.review; 
+      foodData.review = req.body.review;
+    } else {
+      // Free food এর জন্যও quantity
+      foodData.quantity = parseInt(req.body.quantity) || 1;
     }
 
     const result = await foodCollection.insertOne(foodData);
@@ -99,13 +96,16 @@ app.post("/api/posts", upload.single("image"), async (req, res) => {
   }
 });
 
-// Get all posts with optional distance calculation
+// Get all posts (শুধু available posts দেখাবে)
 app.get("/api/posts", async (req, res) => {
   try {
     const { lat, lng } = req.query;
-    const posts = await foodCollection.find({ status: "available" }).sort({ createdAt: -1 }).toArray();
+    // quantity > 0 এর পোস্ট এবং status available
+    const posts = await foodCollection
+      .find({ status: "available", quantity: { $gt: 0 } })
+      .sort({ createdAt: -1 })
+      .toArray();
 
-    // if user location location doesn't find, distance calculate 
     if (lat && lng) {
       const userLat = parseFloat(lat);
       const userLng = parseFloat(lng);
@@ -117,9 +117,6 @@ app.get("/api/posts", async (req, res) => {
           post.distance = null;
         }
       });
-
-      // Distance by sort
-      // posts.sort((a, b) => (a.distance || Infinity) - (b.distance || Infinity));
     }
 
     res.json(posts);
@@ -128,12 +125,12 @@ app.get("/api/posts", async (req, res) => {
   }
 });
 
-//recent post
+// Recent posts
 app.get("/api/recent-posts", async (req, res) => {
   try {
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
     const posts = await foodCollection
-      .find({ createdAt: { $gte: twoHoursAgo } })
+      .find({ createdAt: { $gte: twoHoursAgo }, quantity: { $gt: 0 } })
       .sort({ createdAt: -1 })
       .toArray();
     res.json(posts);
@@ -142,28 +139,26 @@ app.get("/api/recent-posts", async (req, res) => {
   }
 });
 
-// search 
+// Search
 app.get("/api/posts/search", async (req, res) => {
   try {
     const { q, lat, lng } = req.query;
 
-    // Empty search query array return 
     if (!q || q.trim() === "") {
       return res.json([]);
     }
 
-    // MongoDB regex  title, restaurantName,  address 
     const filter = {
       $or: [
         { title: { $regex: q, $options: "i" } },
         { restaurantName: { $regex: q, $options: "i" } },
         { "location.address": { $regex: q, $options: "i" } }
       ],
-      status: "available"
+      status: "available",
+      quantity: { $gt: 0 }
     };
     const posts = await foodCollection.find(filter).limit(10).toArray();
 
-    // Distance calculation location 
     if (lat && lng) {
       const userLat = parseFloat(lat);
       const userLng = parseFloat(lng);
@@ -182,69 +177,131 @@ app.get("/api/posts/search", async (req, res) => {
   }
 });
 
-//get a single post by ID - 
-app.get("/api/posts/:id", async (req, res) =>{
-  try{
+// Get single post
+app.get("/api/posts/:id", async (req, res) => {
+  try {
     const id = req.params.id;
-    
-    // ObjectId validation 
+
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({ error: "Invalid post ID format" });
     }
-    
-    const post = await foodCollection.findOne({ _id: new ObjectId(id)});
 
-    if(!post){
-      return res.status(404).json({error: "Post not found"});
+    const post = await foodCollection.findOne({ _id: new ObjectId(id) });
+
+    if (!post) {
+      return res.status(404).json({ error: "Post not found" });
     }
-    res.json(post)
-  }catch(err){
+    res.json(post);
+  } catch (err) {
     console.error(err);
-    res.status(500).json({error: "Server error"})
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-// book post
+// Book free food
 app.put("/api/posts/:id/book", async (req, res) => {
   try {
     const id = req.params.id;
-    const {userName, contact, address} = req.body;
-    
-    // ObjectId validation 
+    const { userName, contact, address } = req.body;
+
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({ error: "Invalid post ID format" });
     }
-    
+
     const post = await foodCollection.findOne({ _id: new ObjectId(id) });
 
     if (!post) return res.status(404).json({ error: "Post not found" });
 
-    if (post.status === "booked") {
-      return res.status(400).json({ error: "Already booked!" });
+    if (!post.isFree) {
+      return res.status(400).json({ error: "This is not free food, please order!" });
     }
 
-    if(!post.isFree){
-      return res.status(400).json({ error: "This is not a free food, please order!" });
+    if (post.quantity <= 0) {
+      return res.status(400).json({ error: "Out of stock!" });
     }
 
-    const updated = await foodCollection.updateOne(
+    // Quantity decrease করুন
+    const newQuantity = post.quantity - 1;
+    
+    const updateData = {
+      $set: {
+        quantity: newQuantity,
+        status: newQuantity <= 0 ? "unavailable" : "available",
+        bookedBy: { userName, contact, address },
+        bookedAt: new Date()
+      }
+    };
+
+    await foodCollection.updateOne(
       { _id: new ObjectId(id) },
-      { $set: { status: "booked" ,
-                bookedBy: {userName, contact, address}
-      } }
+      updateData
     );
 
-    res.json({ message: "free booked successfully booked!" });
+    res.status(200).json({
+      success: true,
+      message: "Food booked successfully!",
+      remainingQuantity: newQuantity
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Order paid food
+app.put("/api/posts/:id/order", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { userName, contact, address } = req.body;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid post ID format" });
+    }
+
+    const post = await foodCollection.findOne({ _id: new ObjectId(id) });
+
+    if (!post) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+
+    if (post.isFree) {
+      return res.status(400).json({ error: "This is free food, you can book it!" });
+    }
+
+    if (post.quantity <= 0) {
+      return res.status(400).json({ error: "Out of stock!" });
+    }
+
+    // Quantity decrease করুন
+    const newQuantity = post.quantity - 1;
+
+    const updateData = {
+      $set: {
+        quantity: newQuantity,
+        status: newQuantity <= 0 ? "unavailable" : "available",
+        orderedBy: { userName, contact, address },
+        orderedAt: new Date()
+      }
+    };
+
+    await foodCollection.updateOne(
+      { _id: new ObjectId(id) },
+      updateData
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Order placed successfully!",
+      remainingQuantity: newQuantity
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 app.get("/", (req, res) => {
-  res.send(" FoodShare API running...");
+  res.send("FoodShare API running...");
 });
 
-
 app.listen(port, () => {
-  console.log(` Server running on port ${port}`);
+  console.log(`Server running on port ${port}`);
 });
