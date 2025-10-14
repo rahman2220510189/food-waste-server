@@ -85,7 +85,7 @@ app.post("/api/posts", upload.single("image"), async (req, res) => {
       foodData.quantity = parseInt(req.body.quantity);
       foodData.review = req.body.review;
     } else {
-      // Free food এর জন্যও quantity
+      // Free food quantity default 1
       foodData.quantity = parseInt(req.body.quantity) || 1;
     }
 
@@ -96,11 +96,11 @@ app.post("/api/posts", upload.single("image"), async (req, res) => {
   }
 });
 
-// Get all posts (শুধু available posts দেখাবে)
+// Get all posts (available and quantity > 0)
 app.get("/api/posts", async (req, res) => {
   try {
     const { lat, lng } = req.query;
-    // quantity > 0 এর পোস্ট এবং status available
+    // quantity > 0  status available
     const posts = await foodCollection
       .find({ status: "available", quantity: { $gt: 0 } })
       .sort({ createdAt: -1 })
@@ -202,7 +202,11 @@ app.get("/api/posts/:id", async (req, res) => {
 app.put("/api/posts/:id/book", async (req, res) => {
   try {
     const id = req.params.id;
-    const { userName, contact, address } = req.body;
+    const { userName, contact, address,quantity } = req.body;
+    const orederQuantity = quantity && quantity > 0 ? parseInt(quantity) : 1;
+
+   
+
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({ error: "Invalid post ID format" });
@@ -210,7 +214,13 @@ app.put("/api/posts/:id/book", async (req, res) => {
 
     const post = await foodCollection.findOne({ _id: new ObjectId(id) });
 
+     
+
     if (!post) return res.status(404).json({ error: "Post not found" });
+
+     if (post.quantity < orederQuantity) {
+      return res.status(400).json({ error: `Only ${post.quantity} items available` });
+    };
 
     if (!post.isFree) {
       return res.status(400).json({ error: "This is not free food, please order!" });
@@ -220,8 +230,8 @@ app.put("/api/posts/:id/book", async (req, res) => {
       return res.status(400).json({ error: "Out of stock!" });
     }
 
-    // Quantity decrease করুন
-    const newQuantity = post.quantity - 1;
+    // Quantity decrease 
+    const  newQuantity = post.quantity - orederQuantity;
     
     const updateData = {
       $set: {
@@ -251,16 +261,24 @@ app.put("/api/posts/:id/book", async (req, res) => {
 app.put("/api/posts/:id/order", async (req, res) => {
   try {
     const id = req.params.id;
-    const { userName, contact, address } = req.body;
+    const { userName, contact, address, quantity } = req.body;
+    const orederQuantity = quantity && quantity > 0 ? parseInt(quantity) : 1;
 
+    
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({ error: "Invalid post ID format" });
     }
 
     const post = await foodCollection.findOne({ _id: new ObjectId(id) });
 
+
     if (!post) {
       return res.status(404).json({ error: "Post not found" });
+    }
+
+    
+    if (post.quantity < orederQuantity) {
+      return res.status(400).json({ error: `Only ${post.quantity} items available` });
     }
 
     if (post.isFree) {
@@ -271,8 +289,8 @@ app.put("/api/posts/:id/order", async (req, res) => {
       return res.status(400).json({ error: "Out of stock!" });
     }
 
-    // Quantity decrease করুন
-    const newQuantity = post.quantity - 1;
+    // Quantity decrease
+    const newQuantity = post.quantity - orederQuantity;
 
     const updateData = {
       $set: {
