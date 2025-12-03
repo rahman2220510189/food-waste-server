@@ -19,12 +19,15 @@ const MessagesController = require("./controllers/messagesController");
 const HistoryController = require("./controllers/historyController");
 const UserController = require("./controllers/userController");
 const DashboardController = require("./controllers/dashboardController");
+const PaymentController = require("./controllers/paymentController");
 
 const notificationRoutes = require("./routes/notifications");
 const messageRoutes = require("./routes/messages");
 const historyRoutes = require("./routes/history");
 const userRoutes = require("./routes/users");
 const dashboardRoutes = require("./routes/dashboard");
+const paymentRoutes = require("./routes/payment");
+
 
 const app = express();
 const server = http.createServer(app);
@@ -55,6 +58,8 @@ let foodCollection;
 let notificationModel, messageModel, historyModel;
 let notificationsController, messagesController, historyController;
 let userModel, userController, dashboardController;
+let paymentController;
+
 
 async function run() {
   try {
@@ -72,12 +77,16 @@ async function run() {
     userModel = new User(db);
     userController = new UserController(userModel);
     dashboardController = new DashboardController(db, userModel, notificationModel, historyModel);
+    paymentController = new PaymentController(db, notificationModel);
+
     
     app.use("/api/users", userRoutes(userController));
     app.use("/api/dashboard", dashboardRoutes(dashboardController));
     app.use("/api/notifications", notificationRoutes(notificationsController));
     app.use("/api/messages", messageRoutes(messagesController));
     app.use("/api/history", historyRoutes(historyController));
+    app.use("/api/payment", paymentRoutes(paymentController));
+
 
     console.log("✅ MongoDB Connected!");
     console.log("✅ Routes initialized!");
