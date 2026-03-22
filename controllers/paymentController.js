@@ -2,7 +2,7 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const { ObjectId } = require("mongodb");
 
 class PaymentController {
-  constructor(db, notificationModel) {
+  constructor(db, notificationModel) {//obeject of notification model
     this.foodCollection = db.collection("post");
     this.notificationModel = notificationModel;
   }

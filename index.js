@@ -12,7 +12,7 @@ const { MongoClient, ObjectId, ServerApiVersion } = require("mongodb");
 const Notification = require("./models/Notification");
 const Message = require("./models/Message");
 const History = require("./models/History");
-const User = require("./models/User")
+const User = require("./models/User");
 
 const NotificationsController = require("./controllers/notificationsController");
 const MessagesController = require("./controllers/messagesController");
@@ -20,6 +20,8 @@ const HistoryController = require("./controllers/historyController");
 const UserController = require("./controllers/userController");
 const DashboardController = require("./controllers/dashboardController");
 const PaymentController = require("./controllers/paymentController");
+const AdminController = require("./controllers/adminController");
+
 
 const notificationRoutes = require("./routes/notifications");
 const messageRoutes = require("./routes/messages");
@@ -27,15 +29,15 @@ const historyRoutes = require("./routes/history");
 const userRoutes = require("./routes/users");
 const dashboardRoutes = require("./routes/dashboard");
 const paymentRoutes = require("./routes/payment");
-
+const adminRoutes = require("./routes/adminRoutes");
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST", "PUT", "DELETE"]
-  }
+    methods: ["GET", "POST", "PUT", "DELETE"],
+  },
 });
 
 const port = process.env.PORT || 5000;
@@ -60,7 +62,6 @@ let notificationsController, messagesController, historyController;
 let userModel, userController, dashboardController;
 let paymentController;
 
-
 async function run() {
   try {
     await client.connect();
@@ -71,22 +72,31 @@ async function run() {
     messageModel = new Message(db);
     historyModel = new History(db);
 
-    notificationsController = new NotificationsController(notificationModel, messageModel, historyModel);
+    notificationsController = new NotificationsController(
+      notificationModel,
+      messageModel,
+      historyModel
+    );
     messagesController = new MessagesController(messageModel);
-    historyController = new HistoryController(historyModel)
+    historyController = new HistoryController(historyModel);
     userModel = new User(db);
     userController = new UserController(userModel);
-    dashboardController = new DashboardController(db, userModel, notificationModel, historyModel);
+    dashboardController = new DashboardController(
+      db,
+      userModel,
+      notificationModel,
+      historyModel
+    );
     paymentController = new PaymentController(db, notificationModel);
 
-    
     app.use("/api/users", userRoutes(userController));
     app.use("/api/dashboard", dashboardRoutes(dashboardController));
     app.use("/api/notifications", notificationRoutes(notificationsController));
     app.use("/api/messages", messageRoutes(messagesController));
     app.use("/api/history", historyRoutes(historyController));
     app.use("/api/payment", paymentRoutes(paymentController));
-
+    const adminController = new AdminController(db);
+    app.use("/api/admin", adminRoutes(adminController));
 
     console.log("✅ MongoDB Connected!");
     console.log("✅ Routes initialized!");
@@ -96,19 +106,35 @@ async function run() {
 }
 run().catch(console.dir);
 
+// ─────────────────────────────────────────────
+//  SOCKET.IO
+// ─────────────────────────────────────────────
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
-  socket.on("join-chat", (chatId) => {
-    socket.join(chatId);
-    console.log(`User ${socket.id} joined chat ${chatId}`);
+  // ✅ User নিজের personal room এ join করে (notification badge এর জন্য)
+  socket.on("join-user", (userId) => {
+    socket.join(userId);
+    console.log(`✅ User ${userId} joined their room`);
   });
 
+  // ✅ Chat room এ join করে
+  socket.on("join-chat", (chatId) => {
+    socket.join(chatId);
+    console.log(`✅ User ${socket.id} joined chat ${chatId}`);
+  });
+
+  // ✅ Message পাঠানো — শুধু socket দিয়ে DB save + emit (double save নেই)
   socket.on("send-message", async (data) => {
     try {
       const { chatId, senderId, text } = data;
       const message = await messageModel.sendMessage(chatId, senderId, text);
+
+      // Chat room এ সবাই পাবে (live message)
       io.to(chatId).emit("receive-message", message);
+
+      // ✅ Navbar badge এর জন্য — chat room এর অন্যজন পাবে
+      io.to(chatId).emit("new-message", message);
     } catch (error) {
       console.error("Socket message error:", error);
     }
@@ -123,6 +149,9 @@ io.on("connection", (socket) => {
   });
 });
 
+// ─────────────────────────────────────────────
+//  MULTER
+// ─────────────────────────────────────────────
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     if (!fs.existsSync("uploads")) {
@@ -136,16 +165,26 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
+// ─────────────────────────────────────────────
+//  DISTANCE HELPER
+// ─────────────────────────────────────────────
 function calculateDistance(lat1, lon1, lat2, lon2) {
   const R = 6371;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }
+
+// ─────────────────────────────────────────────
+//  FOOD ROUTES
+// ─────────────────────────────────────────────
 
 // Upload food post
 app.post("/api/posts", upload.single("image"), async (req, res) => {
@@ -153,7 +192,9 @@ app.post("/api/posts", upload.single("image"), async (req, res) => {
     const isFree = req.body.isFree === "true";
     const foodData = {
       title: req.body.title,
-      image: req.file ? `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}` : "",
+      image: req.file
+        ? `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`
+        : "",
       location: {
         lat: parseFloat(req.body.lat),
         lng: parseFloat(req.body.lng),
@@ -182,7 +223,7 @@ app.post("/api/posts", upload.single("image"), async (req, res) => {
   }
 });
 
-// Get all posts (available and quantity > 0)
+// Get all posts
 app.get("/api/posts", async (req, res) => {
   try {
     const { lat, lng } = req.query;
@@ -194,10 +235,14 @@ app.get("/api/posts", async (req, res) => {
     if (lat && lng) {
       const userLat = parseFloat(lat);
       const userLng = parseFloat(lng);
-
-      posts.forEach(post => {
+      posts.forEach((post) => {
         if (post.location?.lat && post.location?.lng) {
-          post.distance = calculateDistance(userLat, userLng, post.location.lat, post.location.lng);
+          post.distance = calculateDistance(
+            userLat,
+            userLng,
+            post.location.lat,
+            post.location.lng
+          );
         } else {
           post.distance = null;
         }
@@ -237,20 +282,24 @@ app.get("/api/posts/search", async (req, res) => {
       $or: [
         { title: { $regex: q, $options: "i" } },
         { restaurantName: { $regex: q, $options: "i" } },
-        { "location.address": { $regex: q, $options: "i" } }
+        { "location.address": { $regex: q, $options: "i" } },
       ],
       status: "available",
-      quantity: { $gt: 0 }
+      quantity: { $gt: 0 },
     };
     const posts = await foodCollection.find(filter).limit(10).toArray();
 
     if (lat && lng) {
       const userLat = parseFloat(lat);
       const userLng = parseFloat(lng);
-
-      posts.forEach(post => {
+      posts.forEach((post) => {
         if (post.location?.lat && post.location?.lng) {
-          post.distance = calculateDistance(userLat, userLng, post.location.lat, post.location.lng);
+          post.distance = calculateDistance(
+            userLat,
+            userLng,
+            post.location.lat,
+            post.location.lng
+          );
         }
       });
     }
@@ -283,12 +332,12 @@ app.get("/api/posts/:id", async (req, res) => {
   }
 });
 
-// Book free food - MODIFIED TO CREATE NOTIFICATION
+// ✅ Book free food
 app.put("/api/posts/:id/book", async (req, res) => {
   try {
     const id = req.params.id;
     const { userName, contact, address, quantity, userId } = req.body;
-    const orederQuantity = quantity && quantity > 0 ? parseInt(quantity) : 1;
+    const orderQuantity = quantity && quantity > 0 ? parseInt(quantity) : 1;
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({ error: "Invalid post ID format" });
@@ -297,20 +346,14 @@ app.put("/api/posts/:id/book", async (req, res) => {
     const post = await foodCollection.findOne({ _id: new ObjectId(id) });
 
     if (!post) return res.status(404).json({ error: "Post not found" });
-
-    if (post.quantity < orederQuantity) {
+    if (post.quantity < orderQuantity)
       return res.status(400).json({ error: `Only ${post.quantity} items available` });
-    }
-
-    if (!post.isFree) {
+    if (!post.isFree)
       return res.status(400).json({ error: "This is not free food, please order!" });
-    }
-
-    if (post.quantity <= 0) {
+    if (post.quantity <= 0)
       return res.status(400).json({ error: "Out of stock!" });
-    }
 
-    // Create notification for the food owner
+    // Notification create
     await notificationModel.create({
       ownerId: post.ownerId,
       requesterId: userId || "anonymous",
@@ -319,43 +362,48 @@ app.put("/api/posts/:id/book", async (req, res) => {
       requesterAddress: address,
       foodItemId: new ObjectId(id),
       foodTitle: post.title,
-      quantity: orederQuantity,
+      foodImage: post.image,
+      quantity: orderQuantity,
       type: "book",
-      status: "pending"
+      status: "pending",
     });
 
-    const newQuantity = post.quantity - orederQuantity;
+    // ✅ Food owner কে real-time notification পাঠাও
+    io.to(post.ownerId).emit("new-notification", {
+      foodTitle: post.title,
+      requesterName: userName,
+      type: "book",
+    });
 
-    const updateData = {
-      $set: {
-        quantity: newQuantity,
-        status: newQuantity <= 0 ? "unavailable" : "available",
-        bookedBy: { userName, contact, address },
-        bookedAt: new Date()
-      }
-    };
-
+    const newQuantity = post.quantity - orderQuantity;
     await foodCollection.updateOne(
       { _id: new ObjectId(id) },
-      updateData
+      {
+        $set: {
+          quantity: newQuantity,
+          status: newQuantity <= 0 ? "unavailable" : "available",
+          bookedBy: { userName, contact, address },
+          bookedAt: new Date(),
+        },
+      }
     );
 
     res.status(200).json({
       success: true,
       message: "Booking request sent! Wait for owner's approval.",
-      remainingQuantity: newQuantity
+      remainingQuantity: newQuantity,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Order paid food - MODIFIED TO CREATE NOTIFICATION
+// ✅ Order paid food
 app.put("/api/posts/:id/order", async (req, res) => {
   try {
     const id = req.params.id;
     const { userName, contact, address, quantity, userId } = req.body;
-    const orederQuantity = quantity && quantity > 0 ? parseInt(quantity) : 1;
+    const orderQuantity = quantity && quantity > 0 ? parseInt(quantity) : 1;
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({ error: "Invalid post ID format" });
@@ -363,23 +411,15 @@ app.put("/api/posts/:id/order", async (req, res) => {
 
     const post = await foodCollection.findOne({ _id: new ObjectId(id) });
 
-    if (!post) {
-      return res.status(404).json({ error: "Post not found" });
-    }
-
-    if (post.quantity < orederQuantity) {
+    if (!post) return res.status(404).json({ error: "Post not found" });
+    if (post.quantity < orderQuantity)
       return res.status(400).json({ error: `Only ${post.quantity} items available` });
-    }
-
-    if (post.isFree) {
+    if (post.isFree)
       return res.status(400).json({ error: "This is free food, you can book it!" });
-    }
-
-    if (post.quantity <= 0) {
+    if (post.quantity <= 0)
       return res.status(400).json({ error: "Out of stock!" });
-    }
 
-    // Create notification for the food owner
+    // Notification create
     await notificationModel.create({
       ownerId: post.ownerId,
       requesterId: userId || "anonymous",
@@ -388,32 +428,37 @@ app.put("/api/posts/:id/order", async (req, res) => {
       requesterAddress: address,
       foodItemId: new ObjectId(id),
       foodTitle: post.title,
-      quantity: orederQuantity,
-      price: post.price * orederQuantity,
+      foodImage: post.image,
+      quantity: orderQuantity,
+      price: post.price * orderQuantity,
       type: "order",
-      status: "pending"
+      status: "pending",
     });
 
-    const newQuantity = post.quantity - orederQuantity;
+    // ✅ Food owner কে real-time notification পাঠাও
+    io.to(post.ownerId).emit("new-notification", {
+      foodTitle: post.title,
+      requesterName: userName,
+      type: "order",
+    });
 
-    const updateData = {
-      $set: {
-        quantity: newQuantity,
-        status: newQuantity <= 0 ? "unavailable" : "available",
-        orderedBy: { userName, contact, address },
-        orderedAt: new Date()
-      }
-    };
-
+    const newQuantity = post.quantity - orderQuantity;
     await foodCollection.updateOne(
       { _id: new ObjectId(id) },
-      updateData
+      {
+        $set: {
+          quantity: newQuantity,
+          status: newQuantity <= 0 ? "unavailable" : "available",
+          orderedBy: { userName, contact, address },
+          orderedAt: new Date(),
+        },
+      }
     );
 
     res.status(200).json({
       success: true,
       message: "Order request sent! Wait for owner's approval.",
-      remainingQuantity: newQuantity
+      remainingQuantity: newQuantity,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
